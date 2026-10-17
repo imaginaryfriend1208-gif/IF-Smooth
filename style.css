@@ -3,3 +3,8 @@
 .ifh-settings .ifh-row input { max-width: 6em; }
 .ifh-settings .menu_button { align-self: flex-start; }
 .ifh-settings .ifh-warning { opacity: 0.8; font-size: 0.9em; }
+.ifh-settings .ifh-row select { max-width: 60%; }
+.ifh-settings .ifh-group { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
+.ifh-hits h4 { margin: 10px 0 4px; }
+.ifh-hits ul { margin: 0; padding-left: 1.2em; }
+.ifh-hits li { margin-bottom: 4px; }
