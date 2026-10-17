@@ -1,0 +1,5 @@
+.ifh-settings .inline-drawer-content { display: flex; flex-direction: column; gap: 6px; }
+.ifh-settings .ifh-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ifh-settings .ifh-row input { max-width: 6em; }
+.ifh-settings .menu_button { align-self: flex-start; }
+.ifh-settings .ifh-warning { opacity: 0.8; font-size: 0.9em; }
