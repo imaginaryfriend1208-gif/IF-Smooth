@@ -19,10 +19,23 @@ const DEFAULTS = {
     max_tokens: 0,
     vocab_enabled: true,
     auto: false,
+    threshold: 3,
     show_score: true,
     patterns: {},
     custom: emptyCustom(),
 };
+
+// Inline SVG icons (24×24, stroke = currentColor) so the toolbar does not depend on the icon font.
+const ICONS = {
+    humanize: '<path d="M4 20 15 9"/><path d="m13 7 4 4"/><path d="M18 3v4M16 5h4M6 4v3M4.5 5.5h3M20 13v3M18.5 14.5h3"/>',
+    again: '<path d="M20 11a8 8 0 0 0-14.3-4.9L4 8"/><path d="M4 3v5h5"/><path d="M4 13a8 8 0 0 0 14.3 4.9L20 16"/><path d="M20 21v-5h-5"/>',
+    scan: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
+    changes: '<path d="M7 4v16"/><path d="m4 7 3-3 3 3"/><path d="M17 20V4"/><path d="m14 17 3 3 3-3"/>',
+    original: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
+    result: '<path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/>',
+    busy: '<path d="M12 3a9 9 0 1 0 9 9"/>',
+};
+const svg = name => `<svg class="ifh-icon${name === 'busy' ? ' ifh-spin' : ''}" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 
 const busy = new Set();
 const ctx = () => SillyTavern.getContext();
@@ -255,7 +268,7 @@ function showChanges(id) {
         ${fresh.length ? `<h3>New slop in the edited text (${fresh.length})</h3>${hitList(fresh)}` : ''}`);
 }
 
-/** Toolbar under the message text: Humanize, Scan, and (once humanized) Changes + Original/Humanized. */
+/** Icon toolbar under the message text: Humanize/again, Scan, and (once humanized) Changes + Original/Humanized. */
 function addButtons(id) {
     const element = $(`#chat .mes[mesid="${id}"]`);
     element.find('.ifh-bar').remove();
@@ -263,16 +276,18 @@ function addButtons(id) {
     if (!element.length || !isTarget(message)) return;
     const running = busy.has(id);
     const shown = shownVersion(message);
-    const button = (action, icon, label, title, extra = '') => `<div class="ifh-btn ifh-${action} interactable${extra}" tabindex="0" role="button" title="${title}"><i class="fa-solid ${icon}"></i><span>${label}</span></div>`;
+    const button = (action, icon, title, extra = '') => `<div class="ifh-btn ifh-${action} interactable${extra}" tabindex="0" role="button" title="${title}" aria-label="${title}">${svg(icon)}</div>`;
     let html = running
-        ? button('run', 'fa-spinner fa-spin', 'Humanizing…', 'Humanizing…', ' disabled')
-        : button('run', 'fa-wand-magic-sparkles', 'Humanize', 'Edit the AI-sounding passages (sends a request)');
-    html += button('scan', 'fa-magnifying-glass', 'Scan', 'Show AI-sounding phrases (no request)');
+        ? button('run', 'busy', 'Humanizing…', ' disabled')
+        : shown === 'result'
+            ? button('run', 'again', 'Humanize again (sends a request)')
+            : button('run', 'humanize', 'Humanize (sends a request)');
+    html += button('scan', 'scan', 'Scan for AI-sounding phrases (no request)');
     if (shown && !running) {
-        html += button('changes', 'fa-code-compare', 'Changes', 'Compare the original with the humanized text (no request)');
+        html += button('changes', 'changes', 'What changed: before / after (no request)');
         html += shown === 'result'
-            ? button('original', 'fa-rotate-left', 'Original', 'Show the text before humanizing (no request)')
-            : button('result', 'fa-rotate-right', 'Humanized', 'Show the humanized text again (no request)');
+            ? button('original', 'original', 'Show the original text (no request)')
+            : button('result', 'result', 'Show the humanized text (no request)');
     }
     element.find('.mes_text').after(`<div class="ifh-bar">${html}</div>`);
 }
@@ -281,11 +296,15 @@ function resetButtons() {
     document.querySelectorAll('#chat > .mes[mesid]').forEach(element => addButtons(Number(element.getAttribute('mesid'))));
 }
 
+/** Auto mode: runs in the background (not awaited), only when the reply has at least `threshold` hits. */
 function onCharacterRendered(id, type) {
     id = Number(id);
     addButtons(id);
     const message = ctx().chat[id];
-    if (!settings().auto || type === 'first_message' || shownVersion(message)) return;
+    const config = settings();
+    if (!config.auto || type === 'first_message' || !isTarget(message) || shownVersion(message)) return;
+    const lang = config.language === 'auto' ? detectLanguage(message.mes) : config.language;
+    if (findSlop(message.mes, lang, previousOpening(id), config).length < Math.max(1, Number(config.threshold) || 1)) return;
     humanizeMessage(id, { quiet: true });
 }
 
@@ -341,7 +360,11 @@ function renderSettings() {
                     <label for="ifh_max_tokens"><small>Max response tokens (0 = auto)</small></label>
                     <input id="ifh_max_tokens" class="text_pole" type="number" min="0" step="64">
                 </div>
-                <label class="checkbox_label"><input id="ifh_auto" type="checkbox"><span>Humanize new character messages automatically</span></label>
+                <label class="checkbox_label"><input id="ifh_auto" type="checkbox"><span>Humanize new character messages automatically (in the background)</span></label>
+                <div class="ifh-row">
+                    <label for="ifh_threshold"><small>Auto: only when the reply has at least this many flagged phrases</small></label>
+                    <input id="ifh_threshold" class="text_pole" type="number" min="1" step="1">
+                </div>
                 <label class="checkbox_label"><input id="ifh_show_score" type="checkbox"><span>Show slop count after each run</span></label>
                 <label class="checkbox_label"><input id="ifh_vocab_enabled" type="checkbox"><span>Replace formal words after the rewrite (built-in list + your list)</span></label>
                 <div class="inline-drawer">
@@ -369,6 +392,7 @@ function renderSettings() {
     $('#ifh_language').val(config.language).on('change', function () { config.language = this.value; save(); });
     $('#ifh_mode').val(config.mode).on('change', function () { config.mode = this.value; save(); });
     $('#ifh_rounds').val(config.rounds).on('input', function () { config.rounds = Math.max(0, Math.min(3, Number(this.value) || 0)); save(); });
+    $('#ifh_threshold').val(config.threshold).on('input', function () { config.threshold = Math.max(1, Number(this.value) || 1); save(); });
     $('#ifh_max_tokens').val(config.max_tokens).on('input', function () { config.max_tokens = Math.max(0, Number(this.value) || 0); save(); });
     $('#ifh_prompt').val(config.prompt).on('input', function () { config.prompt = this.value; save(); });
     for (const key of ['auto', 'show_score', 'vocab_enabled']) {

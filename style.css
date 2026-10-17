@@ -19,9 +19,12 @@
 /* Toolbar under each character message */
 .ifh-bar { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; opacity: 0.55; transition: opacity 0.15s; }
 .mes:hover .ifh-bar, .ifh-bar:focus-within { opacity: 1; }
-.ifh-btn { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; font-size: 0.8em; border: 1px solid var(--SmartThemeBorderColor); border-radius: 12px; cursor: pointer; user-select: none; }
+.ifh-btn { display: inline-flex; align-items: center; justify-content: center; width: 1.9em; height: 1.9em; font-size: 0.85em; border: 1px solid var(--SmartThemeBorderColor); border-radius: 50%; cursor: pointer; user-select: none; }
 .ifh-btn:hover { background-color: var(--white30a); }
 .ifh-btn.disabled { cursor: default; opacity: 0.7; }
+.ifh-btn .ifh-icon { width: 1.15em; height: 1.15em; display: block; }
+.ifh-spin { animation: ifh-spin 0.9s linear infinite; }
+@keyframes ifh-spin { to { transform: rotate(360deg); } }
 
 /* Popups */
 .ifh-hits h3 { margin: 12px 0 6px; }
