@@ -1,9 +1,10 @@
 import { ConnectionManagerRequestService } from '../../shared.js';
 import { cleanOutput, parseVocab, replaceVocab } from './src/rules.js';
-import { LANGUAGES, LANGUAGE_CODES, detectLanguage } from './src/languages.js';
+import { LANGUAGES, LANGUAGE_CODES, detectLanguage, languageNotes } from './src/languages.js';
 import { GROUPS, PATTERNS } from './src/patterns.js';
 import { checkOutput, excerpt, groupHits, opening, patternName, sameOpening, scan } from './src/scan.js';
 import { DEFAULT_PROMPT, LEGACY_PROMPTS, buildPrompt, selectRules } from './src/prompt.js';
+import { around, changes, touches } from './src/diff.js';
 
 const MODULE = 'if_humanize';
 const TITLE = 'IF Humanize';
@@ -112,19 +113,27 @@ async function humanize(text, lang, previous, config) {
             language: LANGUAGES[lang].name,
             mode,
             rules: selectRules(hits, { mode, lang, disabled: config.patterns }),
-            notes: LANGUAGES[lang].notes,
+            notes: languageNotes(lang, current),
             hits,
             previous,
         });
         const output = await request(config, system, current, lang);
+        console.debug(`[${TITLE}] round ${round + 1} (${mode})`, { system, output });
         const problem = checkOutput(current, output);
         if (problem) {
-            warning = `Rewrite discarded: ${problem}.`;
+            warning = `Round ${round + 1}: the model's text was discarded (${problem}).`;
+            break;
+        }
+        if (output === current) {
+            warning = `Round ${round + 1}: the model returned the text unchanged. Try another profile or the "Rewrite" mode.`;
             break;
         }
         const next = findSlop(output, lang, previous, config);
         // Keep a round only if it helped: an edit must remove slop, a full rewrite must not add any.
-        if (mode === 'edit' ? next.length >= hits.length : next.length > hits.length) break;
+        if (mode === 'edit' ? next.length >= hits.length : next.length > hits.length) {
+            warning = `Round ${round + 1}: the edit did not reduce slop (${hits.length} → ${next.length}), so it was not kept.`;
+            break;
+        }
         current = output;
         hits = next;
     }
@@ -144,11 +153,15 @@ async function setMessageText(id, message, text) {
     addButtons(id);
 }
 
-function showHits(hits, title) {
-    const body = hits.length
-        ? [...groupHits(hits)].map(([id, group]) => `<h4>${escapeHtml(patternName(id))}</h4><ul>${group.map(hit => `<li><b>${escapeHtml(hit.match)}</b><br><small>${escapeHtml(hit.excerpt)}</small></li>`).join('')}</ul>`).join('')
-        : '<p>No slop found.</p>';
-    ctx().callGenericPopup(`<div class="ifh-hits"><h3>${escapeHtml(title)}</h3>${body}</div>`, ctx().POPUP_TYPE.TEXT, '', { wide: true, allowVerticalScrolling: true, leftAlign: true });
+function popup(html) {
+    ctx().callGenericPopup(`<div class="ifh-hits">${html}</div>`, ctx().POPUP_TYPE.TEXT, '', { wide: true, allowVerticalScrolling: true, leftAlign: true });
+}
+
+function hitList(hits) {
+    return [...groupHits(hits)].map(([id, group]) => `<h4>${escapeHtml(patternName(id))}</h4><ul>${group.map(hit => {
+        const context = hit.excerpt.startsWith(hit.match.slice(0, 150)) && hit.match.length >= hit.excerpt.length - 2 ? '' : `<br><small>${escapeHtml(hit.excerpt)}</small>`;
+        return `<li><b>${escapeHtml(hit.match)}</b>${context}</li>`;
+    }).join('')}</ul>`).join('');
 }
 
 export async function humanizeMessage(id, { quiet = false } = {}) {
@@ -161,24 +174,24 @@ export async function humanizeMessage(id, { quiet = false } = {}) {
     }
     busy.add(id);
     addButtons(id);
-    const original = message.mes;
+    const source = message.mes;
     try {
-        const lang = config.language === 'auto' ? detectLanguage(original) : config.language;
-        const result = await humanize(original, lang, previousOpening(id), config);
+        const lang = config.language === 'auto' ? detectLanguage(source) : config.language;
+        const result = await humanize(source, lang, previousOpening(id), config);
         // The chat may have been switched, or the message swiped or deleted, while waiting.
-        if (ctx().chat[id] !== message || message.mes !== original) return;
+        if (ctx().chat[id] !== message || message.mes !== source) return;
         if (result.warning) toastr.warning(result.warning, TITLE);
-        if (result.text !== original) {
+        const changed = result.text !== source;
+        if (changed) {
             message.extra ??= {};
-            // Keep the very first original across repeated runs on the same text.
-            const first = message.extra.ifh?.result === original ? message.extra.ifh.original : original;
-            message.extra.ifh = { original: first, result: result.text };
+            // Running again on the humanized text keeps the very first original.
+            const original = message.extra.ifh?.result === source ? message.extra.ifh.original : source;
+            message.extra.ifh = { original, result: result.text, lang, note: result.warning };
             await setMessageText(id, message, result.text);
         }
         if (config.show_score) {
             const summary = `${LANGUAGES[lang].name} · slop ${result.before.length} → ${result.after.length}`;
-            const options = result.after.length ? { onclick: () => showHits(result.after, `Still flagged (${summary})`) } : {};
-            toastr.info(result.after.length ? `${summary}. Click for details.` : summary, TITLE, options);
+            toastr.info(changed ? `${summary}. Click to see what changed.` : `${summary}. Text unchanged.`, TITLE, changed ? { onclick: () => showChanges(id) } : {});
         }
     } catch (error) {
         console.error(`[${TITLE}]`, error);
@@ -195,35 +208,73 @@ function scanMessage(id) {
     const config = settings();
     const lang = config.language === 'auto' ? detectLanguage(message.mes) : config.language;
     const hits = findSlop(message.mes, lang, previousOpening(id), config);
-    showHits(hits, `${LANGUAGES[lang].name} · ${hits.length} flagged`);
+    popup(`<h3>Scan only, nothing changed (${LANGUAGES[lang].name} · ${hits.length} flagged)</h3>${hits.length ? hitList(hits) : '<p>No slop found.</p>'}`);
 }
 
-/** Revert only while the message still shows the humanized text (not another swipe or a manual edit). */
-const canRevert = message => typeof message?.extra?.ifh?.original === 'string' && message.mes === message.extra.ifh.result;
+/** Which stored version the message shows now: 'original', 'result', or null (another swipe or a manual edit). */
+function shownVersion(message) {
+    const data = message?.extra?.ifh;
+    if (typeof data?.original !== 'string' || typeof data?.result !== 'string') return null;
+    if (message.mes === data.result) return 'result';
+    if (message.mes === data.original) return 'original';
+    return null;
+}
 
-async function revertMessage(id) {
+/** Switch between the original and the humanized text without a new request. */
+async function showVersion(id, which) {
     const message = ctx().chat[id];
-    if (!canRevert(message)) return;
-    const { original } = message.extra.ifh;
-    delete message.extra.ifh;
-    await setMessageText(id, message, original);
+    if (!shownVersion(message) || busy.has(id)) return;
+    await setMessageText(id, message, message.extra.ifh[which]);
 }
 
+/** Every change as "context <del>removed</del><ins>added</ins> context", tagged with the pattern that flagged it. */
+function showChanges(id) {
+    const message = ctx().chat[id];
+    if (!shownVersion(message)) return;
+    const data = message.extra.ifh;
+    const config = settings();
+    const lang = data.lang || detectLanguage(data.original);
+    const previous = previousOpening(id);
+    const before = findSlop(data.original, lang, previous, config);
+    const after = findSlop(data.result, lang, previous, config);
+    const list = changes(data.original, data.result);
+    const rows = list.map(change => {
+        const names = [...new Set(before.filter(hit => touches(hit, change)).map(hit => patternName(hit.id)))];
+        const tag = names.length ? `<span class="ifh-tag">${escapeHtml(names.join(', '))}</span>` : '<span class="ifh-tag ifh-tag-extra">Extra edit</span>';
+        const part = around(data.original, change.start, change.end);
+        const removed = part.middle ? `<del>${escapeHtml(part.middle)}</del>` : '';
+        const added = change.added ? `<ins>${escapeHtml(change.added)}</ins>` : '';
+        return `<li>${tag}<div>${escapeHtml(part.before)}${removed}${added}${escapeHtml(part.after)}</div></li>`;
+    }).join('');
+    const missed = before.filter(hit => !list.some(change => touches(hit, change)));
+    const fresh = after.filter(hit => list.some(change => hit.index < change.afterEnd && hit.index + hit.match.length > change.afterStart));
+    popup(`<h3>${LANGUAGES[lang].name} · slop ${before.length} → ${after.length} · ${list.length} changes</h3>
+        ${data.note ? `<p class="ifh-note">${escapeHtml(data.note)}</p>` : ''}
+        ${rows ? `<ol class="ifh-changes">${rows}</ol>` : '<p>No differences.</p>'}
+        ${missed.length ? `<h3>Flagged but left as is (${missed.length})</h3>${hitList(missed)}` : ''}
+        ${fresh.length ? `<h3>New slop in the edited text (${fresh.length})</h3>${hitList(fresh)}` : ''}`);
+}
+
+/** Toolbar under the message text: Humanize, Scan, and (once humanized) Changes + Original/Humanized. */
 function addButtons(id) {
     const element = $(`#chat .mes[mesid="${id}"]`);
-    const box = element.find('.extraMesButtons');
-    box.find('.ifh-button').remove();
+    element.find('.ifh-bar').remove();
     const message = ctx().chat[id];
-    if (!box.length || !isTarget(message)) return;
+    if (!element.length || !isTarget(message)) return;
     const running = busy.has(id);
-    const humanize = $('<div class="mes_button ifh-button ifh-run fa-solid interactable" tabindex="0" role="button"></div>')
-        .addClass(running ? 'fa-spinner fa-spin disabled' : 'fa-wand-magic-sparkles')
-        .attr('title', running ? 'Humanizing…' : 'Humanize this message');
-    const check = $('<div class="mes_button ifh-button ifh-scan fa-solid fa-magnifying-glass interactable" tabindex="0" role="button" title="Show AI-sounding phrases"></div>');
-    box.prepend(humanize, check);
-    if (canRevert(message) && !running) {
-        check.after($('<div class="mes_button ifh-button ifh-revert fa-solid fa-rotate-left interactable" tabindex="0" role="button" title="Restore the text before humanizing"></div>'));
+    const shown = shownVersion(message);
+    const button = (action, icon, label, title, extra = '') => `<div class="ifh-btn ifh-${action} interactable${extra}" tabindex="0" role="button" title="${title}"><i class="fa-solid ${icon}"></i><span>${label}</span></div>`;
+    let html = running
+        ? button('run', 'fa-spinner fa-spin', 'Humanizing…', 'Humanizing…', ' disabled')
+        : button('run', 'fa-wand-magic-sparkles', 'Humanize', 'Edit the AI-sounding passages (sends a request)');
+    html += button('scan', 'fa-magnifying-glass', 'Scan', 'Show AI-sounding phrases (no request)');
+    if (shown && !running) {
+        html += button('changes', 'fa-code-compare', 'Changes', 'Compare the original with the humanized text (no request)');
+        html += shown === 'result'
+            ? button('original', 'fa-rotate-left', 'Original', 'Show the text before humanizing (no request)')
+            : button('result', 'fa-rotate-right', 'Humanized', 'Show the humanized text again (no request)');
     }
+    element.find('.mes_text').after(`<div class="ifh-bar">${html}</div>`);
 }
 
 function resetButtons() {
@@ -234,17 +285,28 @@ function onCharacterRendered(id, type) {
     id = Number(id);
     addButtons(id);
     const message = ctx().chat[id];
-    if (!settings().auto || type === 'first_message' || canRevert(message)) return;
+    if (!settings().auto || type === 'first_message' || shownVersion(message)) return;
     humanizeMessage(id, { quiet: true });
 }
 
+/** One collapsed <details> per group; the summary shows "on/total" and a box that turns the whole group on or off. */
 function patternToggles() {
-    return Object.entries(GROUPS).map(([group, label]) => {
-        const items = PATTERNS.filter(pattern => pattern.group === group)
-            .map(pattern => `<label class="checkbox_label" title="${escapeHtml(pattern.rule)}"><input type="checkbox" class="ifh-pattern" data-id="${pattern.id}"><span>${escapeHtml(pattern.name)}</span></label>`)
-            .join('');
-        return `<div class="ifh-group"><b>${escapeHtml(label)}</b>${items}</div>`;
-    }).join('') + '<div class="ifh-group"><b>Custom</b><label class="checkbox_label"><input type="checkbox" class="ifh-pattern" data-id="custom"><span>Custom phrases</span></label></div>';
+    const groups = Object.entries(GROUPS).map(([group, label]) => [group, label, PATTERNS.filter(pattern => pattern.group === group)]);
+    groups.push(['custom', 'Custom', [{ id: 'custom', name: 'Custom phrases', rule: 'Phrases from "Your lists"' }]]);
+    return groups.map(([group, label, items]) => `
+        <details class="ifh-group" data-group="${group}">
+            <summary><input type="checkbox" class="ifh-group-toggle" title="Turn the whole group on or off"><span>${escapeHtml(label)}</span><small class="ifh-count"></small></summary>
+            ${items.map(pattern => `<label class="checkbox_label" title="${escapeHtml(pattern.rule)}"><input type="checkbox" class="ifh-pattern" data-id="${pattern.id}"><span>${escapeHtml(pattern.name)}</span></label>`).join('')}
+        </details>`).join('');
+}
+
+function refreshGroups() {
+    $('.ifh-group').each(function () {
+        const boxes = $(this).find('.ifh-pattern');
+        const on = boxes.filter(':checked').length;
+        $(this).find('.ifh-count').text(`${on}/${boxes.length}`);
+        $(this).find('.ifh-group-toggle').prop({ checked: on === boxes.length, indeterminate: on > 0 && on < boxes.length });
+    });
 }
 
 function renderSettings() {
@@ -317,8 +379,14 @@ function renderSettings() {
     }).on('change', function () {
         if (this.checked) delete config.patterns[this.dataset.id];
         else config.patterns[this.dataset.id] = true;
+        refreshGroups();
         save();
     });
+    // The group box sits inside <summary>: stop the click from also folding the section.
+    $('.ifh-group-toggle').on('click', event => event.stopPropagation()).on('change', function () {
+        $(this).closest('.ifh-group').find('.ifh-pattern').prop('checked', this.checked).trigger('change');
+    });
+    refreshGroups();
     const listLanguage = () => $('#ifh_list_language').val();
     const showLists = () => {
         $('#ifh_custom_slop').val(config.custom[listLanguage()].slop);
@@ -343,9 +411,16 @@ jQuery(() => {
     settings();
     save();
     renderSettings();
-    $(document).on('click', '#chat .ifh-run:not(.disabled)', function () { humanizeMessage(Number($(this).closest('.mes').attr('mesid'))); });
-    $(document).on('click', '#chat .ifh-scan', function () { scanMessage(Number($(this).closest('.mes').attr('mesid'))); });
-    $(document).on('click', '#chat .ifh-revert', function () { revertMessage(Number($(this).closest('.mes').attr('mesid'))); });
+    const actions = {
+        run: humanizeMessage,
+        scan: scanMessage,
+        changes: showChanges,
+        original: id => showVersion(id, 'original'),
+        result: id => showVersion(id, 'result'),
+    };
+    for (const [action, handler] of Object.entries(actions)) {
+        $(document).on('click', `#chat .ifh-${action}:not(.disabled)`, function () { handler(Number($(this).closest('.mes').attr('mesid'))); });
+    }
     eventSource.on(eventTypes.CHARACTER_MESSAGE_RENDERED, onCharacterRendered);
     eventSource.on(eventTypes.MESSAGE_SWIPED, id => addButtons(Number(id)));
     eventSource.on(eventTypes.MESSAGE_UPDATED, id => addButtons(Number(id)));

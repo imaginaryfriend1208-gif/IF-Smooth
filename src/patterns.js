@@ -76,6 +76,58 @@ function pronounRepeat(text) {
     return hits;
 }
 
+const VI_PARTICLES = /^(thôi|ờ|ơ|này|ủa|trời|à|ạ|nhé|nha|nhá|đi|chứ|chớ|mà|nhỉ|cơ|đấy|đó|vậy|hả|hử|kìa|hen|ha|thế|đâu|luôn|chắc|hông|hổng)$/iu;
+
+/** Vietnamese particles sit at the start ("Thôi, ...") or the end ("..., nhé", "... đấy, Yenka"). */
+function spoken(sentence) {
+    const words = sentence.toLowerCase().match(/[\p{L}]+/gu) || [];
+    return [words[0], ...words.slice(-2)].some(word => word && VI_PARTICLES.test(word));
+}
+
+/** Sentences inside each quoted line: [{ index, value }]. The dialogue view masks everything else with newlines. */
+function quotedSentences(text) {
+    return [...text.matchAll(/[^\n]+/g)].map(line => [...line[0].matchAll(/[^.!?…]+[.!?…]*/g)]
+        .map(m => ({ index: line.index + m.index, value: m[0].replace(/^[\s"“«]+|[\s"”»]+$/g, '') }))
+        .filter(s => /[\p{L}\p{N}]/u.test(s.value)));
+}
+
+/** Three short sentences in a row inside one line of speech; for Vietnamese, only when none has a spoken particle. */
+function telegraphic(text, lang) {
+    const hits = [];
+    for (const sentences of quotedSentences(text)) {
+        let run = [];
+        for (const sentence of sentences) {
+            const clipped = lang === 'vi'
+                ? short(sentence.value) <= 7 && !spoken(sentence.value)
+                : short(sentence.value) <= 4;
+            run = clipped ? [...run, sentence] : [];
+            if (run.length === 3) hits.push({ index: run[0].index, match: run.map(s => s.value).join(' ') });
+        }
+    }
+    return hits;
+}
+
+/** One line of speech that chains three or more clauses opening with the same word ("Lão hỏi..., lão bỏ ca, lão đứng..."). */
+function recital(text) {
+    const hits = [];
+    for (const line of text.matchAll(/[^\n]+/g)) {
+        const clauses = line[0].split(/[,;.!?…]/).map(part => (part.replace(/^[\s"“«]+/, '').match(/^[\p{L}]+/u)?.[0] || '').toLowerCase()).filter(Boolean);
+        for (let i = 2; i < clauses.length; i++) {
+            if (clauses[i] === clauses[i - 1] && clauses[i] === clauses[i - 2]) {
+                hits.push({ index: line.index, match: line[0].trim().replace(/^["“«]|["”»]$/g, '') });
+                break;
+            }
+        }
+    }
+    return hits;
+}
+
+/** Four or more questions in the character's speech in one reply. */
+function interview(text) {
+    const questions = [...text.matchAll(/[^.!?…\n"“”«»]+\?+/g)];
+    return questions.length >= 4 ? [{ index: questions[3].index, match: questions.slice(0, 4).map(m => m[0].trim()).join(' / ') }] : [];
+}
+
 function headings(text) {
     return [...text.matchAll(/^#{1,6}\s.+$/gm)].map(m => ({ index: m.index, match: m[0] }));
 }
@@ -86,6 +138,7 @@ export const GROUPS = {
     rhythm: 'Rhythm by rule',
     inflation: 'Inflation',
     fiction: 'Fiction tells',
+    dialogue: 'Dialogue',
     vi: 'Vietnamese: translationese',
     fr: 'French: translationese',
     residue: 'Chatbot residue',
@@ -107,7 +160,9 @@ export const PATTERNS = [
         rule: 'Rewrite "Not X (not Y), just Z" and "It wasn\'t X. It was Y." contrasts: state Z directly. Example: "Không phải hành lý đi chơi cuối tuần. Không phải hai tuần luôn." -> "Hành lý của người dọn hẳn sang ở."',
         watch: {
             en: ['not ... just', "it's not ... it's", "it wasn't ... it was", 'not because ... but because', 'not ... but ...', 'no, not ...'],
-            vi: ['không phải ... mà là', 'không phải ... chỉ là', 'không phải ... không phải', 'chẳng phải ... mà là', 'không chỉ ... mà còn'],
+            vi: ['không phải ... mà là', 'không phải ... chỉ là', 'không phải ... không phải', 'chẳng phải ... mà là', 'không chỉ ... mà còn',
+                // "Tôi không suy diễn. Tôi chỉ nói cái tôi thấy."
+                /(?<![\p{L}])(?:không|chẳng) [^.!?…\n]{1,40}[.!?…]\s*[\p{L}]+ chỉ(?![\p{L}])/giu],
             fr: ["ce n'est pas ... c'est", "ce n'était pas ... c'était", 'non pas ... mais', 'pas ... juste'],
         },
         detect: (text, lang) => lang === 'vi'
@@ -140,6 +195,15 @@ export const PATTERNS = [
             en: ['a beat too long', 'a second too long', 'a moment too long', 'longer than necessary', 'a beat longer', 'one beat'],
             vi: ['lâu hơn cần thiết', 'lâu hơn bình thường', 'lâu hơn một nhịp', 'quá lâu một chút', 'thêm một nhịp'],
             fr: ['un peu trop longtemps', 'plus longtemps que nécessaire', 'une seconde de trop', 'un battement de trop'],
+        },
+    },
+    {
+        id: 'rp.nowait', group: 'rp', name: 'Not waiting for an answer', scope: 'narration',
+        rule: 'Cut "doesn\'t wait for an answer" / "without waiting for a reply" after a question. Go straight to the next action; the unanswered question already shows it.',
+        watch: {
+            en: [/\b(?:doesn't|does not|didn't|did not|don't|won't) wait (?:for (?:an? |the |her |his |your |their )?(?:answer|reply|response)|to (?:hear|be answered))/gi, /\bwithout waiting for (?:an? |the |her |his |your |their )?(?:answer|reply|response)/gi],
+            vi: [/(?<![\p{L}])(?:không|chẳng|chả|không thèm|chẳng thèm) (?:đợi|chờ)(?: [\p{L}]+)?? (?:trả lời|câu trả lời|hồi âm|đáp)(?![\p{L}])/giu],
+            fr: [/\bsans attendre (?:de |la |sa |une )?réponse/giu, /\bn'attend(?:it)? pas (?:de |la |sa )?réponse/giu],
         },
     },
     {
@@ -408,6 +472,50 @@ export const PATTERNS = [
         id: 'fr.connector', group: 'fr', name: 'Formal connectors', scope: 'narration',
         rule: 'Replace formal connectors in narration (néanmoins, de surcroît, par ailleurs, toutefois, en effet) with plain ones or nothing.',
         watch: { fr: ['néanmoins', 'de surcroît', 'par ailleurs', 'toutefois', 'en effet', 'force est de constater', 'il est important de noter'] },
+    },
+
+    // --- Dialogue: speech that reads as written prose ----------------------------------------
+    {
+        id: 'dl.bookish', group: 'dialogue', name: 'Bookish words in speech', scope: 'dialogue',
+        rule: 'Speech uses everyday words. Replace bookish connectors and formal words in casual speech ("dường như, vô cùng, hãy, bởi vì, do đó, tuy nhiên" -> "hình như, lắm, đừng có / đi, tại, nên, mà"), unless this character really talks like that. Example: "Ngài hãy ra ngoài chờ, việc này để tôi đảm nhận." -> "Thôi ngài ra ngoài đi, để đó tôi lo."',
+        watch: {
+            en: ['however', 'therefore', 'furthermore', 'moreover', 'nevertheless', 'thus', 'indeed', 'in addition', 'consequently'],
+            vi: ['dường như', 'vô cùng', 'hãy', 'bởi vì', 'do đó', 'tuy nhiên', 'vì vậy', 'do vậy', 'đảm nhận', 'mặc dù vậy', 'thực sự là', 'hoàn toàn có thể'],
+            fr: ['cependant', 'par conséquent', 'néanmoins', 'toutefois', 'en outre', 'de surcroît', 'ainsi'],
+        },
+    },
+    {
+        id: 'dl.telegraphic', group: 'dialogue', name: 'Telegraphic speech', scope: 'dialogue',
+        rule: 'No chains of short, clipped sentences in speech (and in Vietnamese, none without spoken particles like "thôi, à, nhé, đi, chứ, mà, nhỉ, đấy, vậy, hả"). Relaxed speech runs in loose, complete sentences; clip only under anger, fear or pain. Example: "Gã bên kia ngõ vừa tắt đèn. Ăn đi rồi kể. Tôi ngồi đây tới sáng." -> "Gã bên kia ngõ tắt đèn rồi đấy. Thôi em cứ ăn đi đã, ăn xong rồi kể, tôi ngồi đây với em tới sáng cũng được."',
+        detect: telegraphic,
+    },
+    {
+        id: 'dl.recital', group: 'dialogue', name: 'Evidence recital in speech', scope: 'dialogue',
+        rule: 'No evidence recitals, problem lists or point-by-point reports in speech ("Thứ nhất..., thứ hai...", chained facts, a string of worries). Share one thing at a time and turn the key detail into a question. Example: "Lão hỏi về cái sẹo, lão bỏ ca, lão đứng đầu chợ nhìn vào đây. Em không biết chữ. Lão thì biết." -> "Hôm trước lão hỏi tôi về cái sẹo của em đấy, sáng nay còn bỏ ca ra đứng đầu chợ ngó vào. Mà tờ khế đầu tiên ấy, em có nhớ chữ ký bắt đầu bằng chữ gì không?"',
+        watch: {
+            en: ['first of all', 'firstly', 'secondly', 'number one', 'on top of that', 'and another thing'],
+            vi: ['thứ nhất', 'thứ hai là', 'một là', 'hai là', 'chưa kể', 'đã vậy còn'],
+            fr: ['premièrement', 'deuxièmement', "d'abord", 'en plus de ça'],
+        },
+        detect: recital,
+    },
+    {
+        id: 'dl.therapist', group: 'dialogue', name: 'Therapist talk', scope: 'dialogue',
+        rule: 'No therapist talk: a character does not name the other\'s defenses or patterns ("em đang né đấy", "lần nào sợ em cũng đổi chủ đề", "you\'re deflecting"). Show the insight in behavior instead: they push the subject again, switch tactics, or drop it.',
+        watch: {
+            en: ["you're deflecting", 'you are deflecting', "you're doing it again", "you're pushing me away", 'you always do this when', "you're hiding behind", 'your walls', 'let me in'],
+            vi: ['em đang né', 'anh đang né', 'đang trốn tránh', 'lần nào ... cũng đổi chủ đề', 'đang đẩy anh ra', 'đang đẩy em ra', 'đang tự vệ', 'bức tường của em', 'cho anh vào'],
+            fr: ['tu esquives', 'tu fuis encore', 'tu me repousses', 'tu te caches derrière', 'tu recommences'],
+        },
+    },
+    {
+        id: 'dl.interview', group: 'dialogue', name: 'Interview questions', scope: 'dialogue',
+        rule: 'No interviews. A reply is the character\'s own turn: they react to the one thing that got to them and volunteer about as much as they ask (an opinion, a story, a complaint). Keep at most one or two questions; turn the rest into statements or cut them.',
+        detect: interview,
+    },
+    {
+        id: 'dl.turn', group: 'dialogue', name: 'Answering point by point', scope: 'dialogue',
+        rule: 'Never walk through each point of the other person\'s message in order. Answer the feeling behind it; the rest can go unanswered. Messy is good: fillers, self-corrections, trailing off ("..."), a line cut off with "—", jokes, asking back.',
     },
 
     // --- Chatbot residue (blader E) -----------------------------------------------------------

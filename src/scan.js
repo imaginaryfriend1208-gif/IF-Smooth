@@ -2,7 +2,9 @@
 import { PATTERNS, PATTERN_BY_ID } from './patterns.js';
 
 const PROTECTED = /```[\s\S]*?```|<[^>\n]+>|\{\{[\s\S]*?\}\}|https?:\/\/\S+/g;
-const DIALOGUE = /"[^"\n]*"|“[^”\n]*”|«[^»\n]*»/g;
+// Status / tracker blocks are copied as is by the prompt, so flagging them would only block the rescan.
+const BLOCKS = /<(details|pre|table|code|style|script)\b[\s\S]*?<\/\1>|^.*<br\s*\/?>.*$/gim;
+const DIALOGUE =/"[^"\n]*"|“[^”\n]*”|«[^»\n]*»/g;
 const GAP = '[^.!?…\\n]{0,40}?';
 const cache = new Map();
 
@@ -23,7 +25,7 @@ function mask(text, pattern) {
 }
 
 function views(text) {
-    const full = mask(text, PROTECTED);
+    const full = mask(mask(text, BLOCKS), PROTECTED);
     const narration = mask(full, DIALOGUE);
     let dialogue = '';
     let last = 0;
@@ -102,16 +104,19 @@ export function sameOpening(a, b) {
     return Boolean(words(a)) && words(a) === words(b);
 }
 
-function multiset(text, pattern) {
-    return (String(text).match(pattern) || []).map(item => item.replace(/\s+/g, ' ')).sort().join('\u0001');
+function multiset(text, pattern, normalize = item => item.replace(/\s+/g, ' ')) {
+    return (String(text).match(pattern) || []).map(normalize).sort().join('\u0001');
 }
+
+// <br>, <br/> and <BR /> are the same tag: compare lower-case name and attributes only.
+const tagKey = tag => tag.toLowerCase().replace(/\s*\/?>$/, '>').replace(/\s+/g, ' ');
 
 /**
  * Compare a rewrite with the source. Returns a reason string when the rewrite must be rejected, else null.
  * Checks HTML tags, macros, code fences, asterisk balance and length.
  */
 export function checkOutput(source, output, { minRatio = 0.6, maxRatio = 1.4 } = {}) {
-    if (multiset(source, /<\/?[a-zA-Z][^>]*>/g) !== multiset(output, /<\/?[a-zA-Z][^>]*>/g)) return 'HTML tags changed';
+    if (multiset(source, /<\/?[a-zA-Z][^>]*>/g, tagKey) !== multiset(output, /<\/?[a-zA-Z][^>]*>/g, tagKey)) return 'HTML tags changed';
     if (multiset(source, /\{\{[\s\S]*?\}\}/g) !== multiset(output, /\{\{[\s\S]*?\}\}/g)) return 'macros changed';
     if ((source.match(/```/g) || []).length !== (output.match(/```/g) || []).length) return 'code blocks changed';
     if ((source.match(/\*/g) || []).length % 2 === 0 && (output.match(/\*/g) || []).length % 2 === 1) return 'unbalanced *asterisks*';

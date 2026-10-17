@@ -1,10 +1,35 @@
-.ifh-settings .inline-drawer-content { display: flex; flex-direction: column; gap: 6px; }
+/* No display rule on .inline-drawer-content: ST hides it by default and slide-toggles it. */
+.ifh-settings .inline-drawer-content > * { margin-top: 3px; margin-bottom: 3px; }
 .ifh-settings .ifh-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ifh-settings .ifh-row input { max-width: 6em; }
-.ifh-settings .menu_button { align-self: flex-start; }
-.ifh-settings .ifh-warning { opacity: 0.8; font-size: 0.9em; }
 .ifh-settings .ifh-row select { max-width: 60%; }
-.ifh-settings .ifh-group { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
+.ifh-settings .menu_button { width: fit-content; }
+.ifh-settings .ifh-warning { opacity: 0.8; font-size: 0.9em; }
+
+/* Pattern groups: collapsed by default */
+.ifh-settings .ifh-group { border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; padding: 2px 8px; }
+.ifh-settings .ifh-group summary { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 3px 0; font-weight: bold; }
+.ifh-settings .ifh-group summary::before { content: '▸'; opacity: 0.7; }
+.ifh-settings .ifh-group[open] summary::before { content: '▾'; }
+.ifh-settings .ifh-group summary::-webkit-details-marker { display: none; }
+.ifh-settings .ifh-group .ifh-count { margin-left: auto; opacity: 0.6; font-weight: normal; }
+.ifh-settings .ifh-group[open] { padding-bottom: 6px; }
+.ifh-settings .ifh-group .checkbox_label { margin-left: 1.4em; }
+
+/* Toolbar under each character message */
+.ifh-bar { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; opacity: 0.55; transition: opacity 0.15s; }
+.mes:hover .ifh-bar, .ifh-bar:focus-within { opacity: 1; }
+.ifh-btn { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; font-size: 0.8em; border: 1px solid var(--SmartThemeBorderColor); border-radius: 12px; cursor: pointer; user-select: none; }
+.ifh-btn:hover { background-color: var(--white30a); }
+.ifh-btn.disabled { cursor: default; opacity: 0.7; }
+
+/* Popups */
+.ifh-hits h3 { margin: 12px 0 6px; }
 .ifh-hits h4 { margin: 10px 0 4px; }
-.ifh-hits ul { margin: 0; padding-left: 1.2em; }
-.ifh-hits li { margin-bottom: 4px; }
+.ifh-hits ul, .ifh-hits ol { margin: 0; padding-left: 1.4em; }
+.ifh-hits li { margin-bottom: 6px; }
+.ifh-hits del { color: #e57373; text-decoration: line-through; }
+.ifh-hits ins { color: #81c784; text-decoration: none; background: rgba(129, 199, 132, 0.12); }
+.ifh-hits .ifh-tag { display: inline-block; font-size: 0.75em; padding: 0 6px; border-radius: 8px; background: var(--white30a); margin-bottom: 2px; }
+.ifh-hits .ifh-tag-extra { opacity: 0.6; }
+.ifh-hits .ifh-note { color: #ffb74d; }
