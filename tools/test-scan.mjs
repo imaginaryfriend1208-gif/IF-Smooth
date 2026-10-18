@@ -72,6 +72,15 @@ test('dialogue notes only when the reply has speech', async () => {
     assert.ok(!languageNotes('vi', 'Anh quay đi.').includes('tiểu từ'));
 });
 
+test('Chinese/Japanese/Korean leaks', () => {
+    const hits = scan('Anh không cho ai隔着 màn hình lôi cô về Mississippi ngay lập tức.', 'vi').filter(hit => hit.id === 'res.cjk');
+    assert.deepEqual(hits.map(hit => hit.match), ['隔着']);
+    assert.ok(ids('She said 大丈夫 and left.', 'en').includes('res.cjk'));
+    assert.ok(ids('Il a dit 사랑해.', 'fr').includes('res.cjk'));
+    assert.deepEqual(scan('<span title="漢字">ok</span>\n```\n中文\n```\n{{char}}', 'en').filter(hit => hit.id === 'res.cjk'), [], 'markup and code are skipped');
+    assert.equal(detectLanguage('Anh không cho ai隔着 màn hình lôi cô về.'), 'vi');
+});
+
 test('language detection', () => {
     assert.equal(detectLanguage('He picks up his glass and drinks from it anyway.'), 'en');
     assert.equal(detectLanguage('Il prend son verre, voit qu’il est vide, et boit quand même.'), 'fr');

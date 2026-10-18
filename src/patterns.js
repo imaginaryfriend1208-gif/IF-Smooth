@@ -128,6 +128,9 @@ function interview(text) {
     return questions.length >= 4 ? [{ index: questions[3].index, match: questions.slice(0, 4).map(m => m[0].trim()).join(' / ') }] : [];
 }
 
+// Han, kana and Hangul runs, with CJK punctuation; the scanner already masks code, HTML and macros.
+const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}][\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}　-〿！-｠]*/gu;
+
 function headings(text) {
     return [...text.matchAll(/^#{1,6}\s.+$/gm)].map(m => ({ index: m.index, match: m[0] }));
 }
@@ -150,9 +153,9 @@ export const PATTERNS = [
         id: 'rp.simile', group: 'rp', name: 'Similes and "as if" guesses', scope: 'all',
         rule: 'Remove similes and comparisons in any form ("like", "as if" guesses, "the way you\'d...", stock images). State what happens instead. If the sentence works without the comparison, cut the comparison.',
         watch: {
-            en: ['as if', 'as though', "the way you'd", 'the way one', 'like a', 'like an', 'like the'],
-            vi: ['như thể', 'cứ như', 'tựa như', 'tựa hồ', 'giống như một', 'giống như là', 'như một', 'như muốn', 'chẳng khác nào', 'y như'],
-            fr: ['comme si', 'tel un', 'telle une', 'comme un', 'comme une', 'pareil à', 'semblable à'],
+            en: ['as if', 'as though', "the way you'd", 'the way one', 'like a', 'like an', 'like the', 'discussing the weather', 'talking about the weather', 'like a map'],
+            vi: ['như thể', 'cứ như', 'tựa như', 'tựa hồ', 'giống như một', 'giống như là', 'như một', 'như muốn', 'chẳng khác nào', 'y như', 'chuyện thời tiết', 'tấm bản đồ'],
+            fr: ['comme si', 'tel un', 'telle une', 'comme un', 'comme une', 'pareil à', 'semblable à', 'parler de la météo'],
         },
     },
     {
@@ -519,6 +522,11 @@ export const PATTERNS = [
     },
 
     // --- Chatbot residue (blader E) -----------------------------------------------------------
+    {
+        id: 'res.cjk', group: 'residue', name: 'Chinese/Japanese/Korean leaks', scope: 'all',
+        rule: 'Chinese, Japanese or Korean characters leaked into the text. Replace each with the plain word that means the same in the language of the rest of the text, keeping the sentence ("không cho ai隔着 màn hình lôi cô về" -> "không cho ai qua màn hình lôi cô về"). Change nothing else in that sentence.',
+        detect: (text) => [...text.matchAll(CJK)].map(m => ({ index: m.index, match: m[0] })),
+    },
     {
         id: 'res.chatbot', group: 'residue', name: 'Chatbot residue', scope: 'narration',
         rule: 'Delete assistant chatter, notes to the user and offers to continue. The reply must read as story, not as an answer.',

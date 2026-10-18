@@ -296,7 +296,7 @@ function resetButtons() {
     document.querySelectorAll('#chat > .mes[mesid]').forEach(element => addButtons(Number(element.getAttribute('mesid'))));
 }
 
-/** Auto mode: runs in the background (not awaited), only when the reply has at least `threshold` hits. */
+/** Auto mode: runs in the background (not awaited), only when the reply has at least `threshold` hits or a CJK leak. */
 function onCharacterRendered(id, type) {
     id = Number(id);
     addButtons(id);
@@ -304,7 +304,9 @@ function onCharacterRendered(id, type) {
     const config = settings();
     if (!config.auto || type === 'first_message' || !isTarget(message) || shownVersion(message)) return;
     const lang = config.language === 'auto' ? detectLanguage(message.mes) : config.language;
-    if (findSlop(message.mes, lang, previousOpening(id), config).length < Math.max(1, Number(config.threshold) || 1)) return;
+    const hits = findSlop(message.mes, lang, previousOpening(id), config);
+    // A Chinese/Japanese/Korean leak is always fixed, whatever the threshold.
+    if (hits.length < Math.max(1, Number(config.threshold) || 1) && !hits.some(hit => hit.id === 'res.cjk')) return;
     humanizeMessage(id, { quiet: true });
 }
 
