@@ -128,6 +128,85 @@ function interview(text) {
     return questions.length >= 4 ? [{ index: questions[3].index, match: questions.slice(0, 4).map(m => m[0].trim()).join(' / ') }] : [];
 }
 
+// --- Rhythm devices carried over from English (they survive translation, so they work for every language) ---
+
+const words = value => value.toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
+const trimmed = m => ({ index: m.index + m[0].length - m[0].trimStart().length, value: m[0].trim() });
+const sentenceList = text => [...text.matchAll(/[^.!?…\n]+[.!?…]*/g)].map(trimmed).filter(s => /[\p{L}\p{N}]/u.test(s.value));
+// Once can be a choice; twice in one reply is a habit, so these only fire from the second occurrence.
+const habit = hits => hits.length >= 2 ? hits : [];
+
+const ITEM = '[^,;:.!?…\\n"“”«»]{1,40}';
+const AND = { en: 'and|or', vi: 'và|hay|hoặc', fr: 'et|ou' };
+
+/** "A, B, and C". In Vietnamese the comma before "và" is itself a calque, so every one is flagged. */
+function tricolon(text, lang) {
+    const and = AND[lang] || AND.en;
+    // The first item starts at a clause boundary; the last one is shown as its first few words.
+    const tail = '\\p{L}+(?: \\p{L}+){0,3}';
+    const pattern = `(?<=^|[,;:.!?…\\n"“”«»(]\\s*)${ITEM}, ${ITEM},${lang === 'vi' ? '' : '?'} (?:${and}) ${tail}`;
+    const hits = [...text.matchAll(new RegExp(pattern, 'giu'))].map(trimmed).map(s => ({ index: s.index, match: s.value }));
+    return lang === 'vi' ? hits : habit(hits);
+}
+
+/** Three clauses in a row opening with the same word ("trong ví, trong túi áo, trong túi quần"). */
+function anaphora(text) {
+    const hits = [];
+    for (const sentence of sentenceList(text)) {
+        const clauses = [...sentence.value.matchAll(/[^,;]+/g)].map(trimmed).filter(c => c.value);
+        for (let i = 2; i < clauses.length; i++) {
+            const first = c => words(c.value)[0];
+            // The first link may sit mid-clause: "Anh mang nó trong ví, trong túi áo, trong túi quần".
+            if (first(clauses[i]) && first(clauses[i]) === first(clauses[i - 1]) && words(clauses[i - 2].value).includes(first(clauses[i]))) {
+                const start = clauses[i - 2].index;
+                hits.push({ index: sentence.index + start, match: sentence.value.slice(start, clauses[i].index + clauses[i].value.length) });
+                break;
+            }
+        }
+    }
+    return habit(hits);
+}
+
+/** A short sentence repeated to open the next one ("Mười bốn năm. Mười bốn năm anh mang nó..."). */
+function repeats(text) {
+    const hits = [];
+    const list = sentenceList(text);
+    for (let i = 1; i < list.length; i++) {
+        const a = words(list[i - 1].value);
+        const b = words(list[i].value);
+        if (a.length >= 1 && a.length <= 5 && b.length >= a.length && a.every((word, k) => b[k] === word)) {
+            hits.push({ index: list[i - 1].index, match: `${list[i - 1].value} ${list[i].value}`.slice(0, 100) });
+        }
+    }
+    return habit(hits);
+}
+
+/** A fragment that repeats part of the sentence before it ("...phủ mờ gần hết vách kính. Gần hết."). */
+function echoFragments(text) {
+    const hits = [];
+    const list = sentenceList(text);
+    for (let i = 1; i < list.length; i++) {
+        const a = words(list[i - 1].value);
+        const b = words(list[i].value);
+        if (b.length < 2 || b.length > 4 || a.length < b.length + 3) continue;
+        if (` ${a.join(' ')} `.includes(` ${b.join(' ')} `)) hits.push({ index: list[i].index, match: list[i].value });
+    }
+    return habit(hits);
+}
+
+/** A colon that sets up a reveal mid-narration ("một thứ mùi khác: dầu gội dừa"). Speaker labels and tracker keys are skipped. */
+function revealColons(text) {
+    const hits = [];
+    for (const line of text.matchAll(/[^\n]+/g)) {
+        for (const colon of line[0].matchAll(/:\s+(?=\p{L})/gu)) {
+            // Words since the last sentence end or bracket: "Dana (Marlowe):" and "(Ý: ..." glosses stay short.
+            if (words(line[0].slice(0, colon.index).split(/[.!?…([]/).pop()).length <= 6) continue;
+            hits.push({ index: line.index + colon.index, match: line[0].slice(Math.max(0, colon.index - 30), colon.index + 30).trim() });
+        }
+    }
+    return habit(hits);
+}
+
 // Han, kana and Hangul runs, with CJK punctuation; the scanner already masks code, HTML and macros.
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}][\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}　-〿！-｠]*/gu;
 
@@ -341,6 +420,31 @@ export const PATTERNS = [
         id: 'rh.dash', group: 'rhythm', name: 'Dashes everywhere', scope: 'narration',
         rule: 'Use at most two mid-sentence dashes per reply; replace the rest with commas, periods or restructured sentences. Dashes for interrupted speech and line-opening dialogue dashes stay.',
         detect: (text) => dashes(text),
+    },
+    {
+        id: 'rh.tricolon', group: 'rhythm', name: 'Lists of three', scope: 'narration',
+        rule: 'Cut lists of three ("A, B, and C") down to the one or two details that matter; at most one triplet per reply. In Vietnamese, a list never takes a comma before "và" ("dầu gội dừa, hơi ấm, và mùi thảo dược" -> "mùi dầu gội dừa lẫn mùi thảo dược").',
+        detect: (text, lang) => tricolon(text, lang),
+    },
+    {
+        id: 'rh.anaphora', group: 'rhythm', name: 'Same-start clause chains', scope: 'narration',
+        rule: 'Do not chain three clauses that open the same way ("in his wallet, in his coat, in his scrubs"; "trong ví, trong túi áo, trong túi quần"); at most one per reply. Keep one, or fold them into a single plain phrase ("mang theo người suốt mười bốn năm").',
+        detect: (text) => anaphora(text),
+    },
+    {
+        id: 'rh.repeat', group: 'rhythm', name: 'Repeated sentence for emphasis', scope: 'narration',
+        rule: 'Do not repeat a short sentence to open the next one for emphasis ("Fourteen years. Fourteen years he carried it."; "Cô ấy cười. Cô ấy cười, như thể..."); at most one per reply. Say it once.',
+        detect: (text) => repeats(text),
+    },
+    {
+        id: 'rh.echo', group: 'rhythm', name: 'Echo fragments', scope: 'narration',
+        rule: 'Do not follow a sentence with a fragment that repeats part of it ("...fogged most of the glass. Most of it."; "...phủ mờ gần hết vách kính. Gần hết."); at most one per reply. Fold the qualifier into the sentence or cut it.',
+        detect: (text) => echoFragments(text),
+    },
+    {
+        id: 'rh.colon', group: 'rhythm', name: 'Reveal colons', scope: 'narration',
+        rule: 'Avoid colons that set up a reveal in narration ("another smell: coconut shampoo"; "một thứ mùi khác: dầu gội dừa"); at most one per reply. Use a comma, "là", or two sentences.',
+        detect: (text) => revealColons(text),
     },
 
     // --- Inflation (blader C) -----------------------------------------------------------------

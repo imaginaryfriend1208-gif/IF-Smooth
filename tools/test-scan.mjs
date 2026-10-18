@@ -72,6 +72,24 @@ test('dialogue notes only when the reply has speech', async () => {
     assert.ok(!languageNotes('vi', 'Anh quay đi.').includes('tiểu từ'));
 });
 
+test('rhythm devices carried over from English', () => {
+    const has = (text, id, lang = 'vi') => ids(text, lang).includes(id);
+    // Vietnamese: a comma before "và" in a list is flagged every time.
+    assert.ok(has('Một thứ mùi khác, dầu gội dừa, hơi ấm, và cái gì đó như lá thảo dược.', 'rh.tricolon'));
+    assert.ok(!has('Cô mua táo, cam và chuối.', 'rh.tricolon'));
+    // English: one triplet is a choice, two is a habit.
+    assert.ok(!has('He was cold, wet, and tired.', 'rh.tricolon', 'en'));
+    assert.ok(has('He was cold, wet, and tired. The room was dark, quiet, and empty.', 'rh.tricolon', 'en'));
+    const chain = 'Anh mang nó trong ví, trong túi áo, trong túi quần.';
+    assert.ok(!has(chain, 'rh.anaphora'));
+    assert.ok(has(`${chain} Cô tìm ở bếp, ở phòng khách, ở ban công.`, 'rh.anaphora'));
+    assert.ok(has('Mười bốn năm. Mười bốn năm anh mang nó. Cô ấy cười. Cô ấy cười, như thể không có gì.', 'rh.repeat'));
+    assert.ok(!has('Mười bốn năm. Mười bốn năm anh mang nó.', 'rh.repeat'));
+    assert.ok(has('Hơi nước phủ mờ gần hết vách kính. Gần hết. Anh nhìn vào ngăn tủ trống trơn lạnh lẽo. Trống trơn.', 'rh.echo'));
+    assert.ok(has('Lẫn vào đó là một thứ mùi khác: dầu gội dừa. Trên bàn là đúng hai món đồ của cô: cái lược.', 'rh.colon'));
+    assert.ok(!has('Dana (Marlowe): Jan 3, 8pm. Anh đọc lại tin nhắn trên màn hình rồi nói (Ý: không sao). Tin nhắn mới: đừng trễ nhé.', 'rh.colon'));
+});
+
 test('Chinese/Japanese/Korean leaks', () => {
     const hits = scan('Anh không cho ai隔着 màn hình lôi cô về Mississippi ngay lập tức.', 'vi').filter(hit => hit.id === 'res.cjk');
     assert.deepEqual(hits.map(hit => hit.match), ['隔着']);
